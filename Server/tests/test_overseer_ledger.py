@@ -156,6 +156,25 @@ def test_rejects_non_finite_or_naive_timestamps(ledger):
     assert offset_event.created_at == "2025-01-01T00:00:00+00:00"
 
 
+def test_orders_events_by_utc_time_when_offsets_differ(ledger):
+    ledger.record(
+        category="activity",
+        event_type="older",
+        team_id="t",
+        agent_id="a",
+        created_at=datetime.fromisoformat("2025-01-01T00:00:00+14:00"),
+    )
+    ledger.record(
+        category="activity",
+        event_type="newer",
+        team_id="t",
+        agent_id="a",
+        created_at=datetime.fromisoformat("2024-12-31T23:00:00+00:00"),
+    )
+
+    assert [event.event_type for event in ledger.list_events()] == ["newer", "older"]
+
+
 def test_requires_approval_is_visible_and_can_be_approved(ledger):
     event = ledger.record(
         category="cost",
