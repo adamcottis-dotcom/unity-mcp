@@ -67,6 +67,8 @@ an isolated database owned by the ledger, with access serialized for FastAPI
 worker threads.
 
 Amounts are stored as exact decimals and summaries are separated by currency.
+Existing ledgers with the earlier SQLite `REAL` amount column are migrated to
+the exact `TEXT` representation before new events are written.
 Pending approval events remain visible in the activity and approval feeds but
 are excluded from realized revenue, cost, and profit totals until approved.
 

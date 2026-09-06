@@ -72,6 +72,11 @@ class EventLedger:
                 metadata_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            """
+        )
+        self._migrate_legacy_amount_column()
+        self._connection.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_ledger_events_team
                 ON ledger_events(team_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_ledger_events_approval
@@ -79,6 +84,48 @@ class EventLedger:
             """
         )
         self._connection.commit()
+
+    def _migrate_legacy_amount_column(self) -> None:
+        columns = self._connection.execute("PRAGMA table_info(ledger_events)").fetchall()
+        amount_column = next((column for column in columns if column["name"] == "amount"), None)
+        if amount_column is None or amount_column["type"].upper() != "REAL":
+            return
+
+        self._connection.execute("BEGIN")
+        try:
+            self._connection.execute("ALTER TABLE ledger_events RENAME TO ledger_events_legacy")
+            self._connection.execute(
+                """
+                CREATE TABLE ledger_events (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL CHECK (category IN ('activity', 'revenue', 'cost')),
+                    event_type TEXT NOT NULL,
+                    team_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    task_id TEXT,
+                    amount TEXT NOT NULL DEFAULT '0',
+                    currency TEXT NOT NULL,
+                    requires_approval INTEGER NOT NULL DEFAULT 0,
+                    approved_by TEXT,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                INSERT INTO ledger_events
+                SELECT id, category, event_type, team_id, agent_id, task_id,
+                       CAST(amount AS TEXT), currency, requires_approval, approved_by,
+                       metadata_json, created_at
+                FROM ledger_events_legacy
+                """
+            )
+            self._connection.execute("DROP TABLE ledger_events_legacy")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
 
     def record(
         self,

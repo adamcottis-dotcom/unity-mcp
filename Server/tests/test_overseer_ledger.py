@@ -78,13 +78,47 @@ def test_exact_money_is_currency_aware_and_pending_amounts_are_excluded(ledger):
     assert by_currency["USD"].revenue == Decimal("0.30")
     assert by_currency["EUR"].revenue == Decimal("0")
     assert by_currency["EUR"].pending_approvals == 1
-
-    ledger.approve(
-        ledger.list_pending_approvals()[0].id,
-        "operator-1",
-    )
+    ledger.approve(ledger.list_pending_approvals()[0].id, "operator-1")
     by_currency = {summary.currency: summary for summary in ledger.summarize()}
     assert by_currency["EUR"].revenue == Decimal("100")
+
+
+def test_migrates_legacy_real_amount_column_before_new_writes(tmp_path):
+    connection = sqlite3.connect(tmp_path / "legacy.db")
+    connection.execute(
+        """
+        CREATE TABLE ledger_events (
+            id TEXT PRIMARY KEY,
+            category TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            team_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            task_id TEXT,
+            amount REAL NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL,
+            requires_approval INTEGER NOT NULL DEFAULT 0,
+            approved_by TEXT,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+    ledger = EventLedger(connection)
+    amount_type = connection.execute(
+        "PRAGMA table_info(ledger_events)"
+    ).fetchall()[6][2]
+    ledger.record(
+        category="revenue",
+        event_type="paid",
+        team_id="support",
+        agent_id="billing",
+        amount="123.456789",
+        currency="USD",
+    )
+
+    assert amount_type == "TEXT"
+    assert ledger.list_events(limit=1)[0].amount == Decimal("123.456789")
 
 
 def test_rejects_non_finite_or_naive_timestamps(ledger):
