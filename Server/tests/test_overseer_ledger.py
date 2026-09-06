@@ -63,7 +63,7 @@ def test_exact_money_is_currency_aware_and_pending_amounts_are_excluded(ledger):
         amount="0.20",
         currency="usd",
     )
-    ledger.record(
+    pending_revenue = ledger.record(
         category="revenue",
         event_type="pending",
         team_id="support",
@@ -72,15 +72,32 @@ def test_exact_money_is_currency_aware_and_pending_amounts_are_excluded(ledger):
         currency="eur",
         requires_approval=True,
     )
+    pending_cost = ledger.record(
+        category="cost",
+        event_type="refund_requested",
+        team_id="support",
+        agent_id="billing",
+        amount="0.05",
+        currency="usd",
+        requires_approval=True,
+    )
 
     summaries = ledger.summarize()
     by_currency = {summary.currency: summary for summary in summaries}
     assert by_currency["USD"].revenue == Decimal("0.30")
+    assert by_currency["USD"].costs == Decimal("0")
+    assert by_currency["USD"].profit == Decimal("0.30")
     assert by_currency["EUR"].revenue == Decimal("0")
     assert by_currency["EUR"].pending_approvals == 1
-    ledger.approve(ledger.list_pending_approvals()[0].id, "operator-1")
+    assert by_currency["EUR"].costs == Decimal("0")
+    assert by_currency["EUR"].profit == Decimal("0")
+    ledger.approve(pending_revenue.id, "operator-1")
+    ledger.approve(pending_cost.id, "operator-1")
     by_currency = {summary.currency: summary for summary in ledger.summarize()}
     assert by_currency["EUR"].revenue == Decimal("100")
+    assert by_currency["EUR"].profit == Decimal("100")
+    assert by_currency["USD"].costs == Decimal("0.05")
+    assert by_currency["USD"].profit == Decimal("0.25")
 
 
 def test_migrates_legacy_real_amount_column_before_new_writes(tmp_path):
