@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import sqlite3
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -46,6 +47,7 @@ class EventLedger:
     """SQLite-backed ledger suitable for simulation and a later API adapter."""
 
     def __init__(self, connection: sqlite3.Connection):
+        self._lock = RLock()
         database_path = connection.execute("PRAGMA database_list").fetchone()[2]
         if database_path:
             self._connection = sqlite3.connect(database_path, check_same_thread=False)
@@ -128,41 +130,44 @@ class EventLedger:
             metadata=metadata or {},
             created_at=normalized_created_at.isoformat(),
         )
-        self._connection.execute(
-            """
-            INSERT INTO ledger_events
-            (id, category, event_type, team_id, agent_id, task_id, amount, currency,
-             requires_approval, approved_by, metadata_json, created_at)
-            VALUES (:id, :category, :event_type, :team_id, :agent_id, :task_id, :amount,
-                    :currency, :requires_approval, :approved_by, :metadata_json, :created_at)
-            """,
-            {**asdict(event), "requires_approval": int(event.requires_approval),
-             "amount": str(event.amount),
-             "metadata_json": json.dumps(event.metadata, sort_keys=True)},
-        )
-        self._connection.commit()
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO ledger_events
+                (id, category, event_type, team_id, agent_id, task_id, amount, currency,
+                 requires_approval, approved_by, metadata_json, created_at)
+                VALUES (:id, :category, :event_type, :team_id, :agent_id, :task_id, :amount,
+                        :currency, :requires_approval, :approved_by, :metadata_json, :created_at)
+                """,
+                {**asdict(event), "requires_approval": int(event.requires_approval),
+                 "amount": str(event.amount),
+                 "metadata_json": json.dumps(event.metadata, sort_keys=True)},
+            )
+            self._connection.commit()
         return event
 
     def approve(self, event_id: str, approver_id: str) -> LedgerEvent:
         if not approver_id:
             raise ValueError("approver_id is required")
-        cursor = self._connection.execute(
-            """
-            UPDATE ledger_events
-            SET requires_approval = 0, approved_by = ?
-            WHERE id = ? AND requires_approval = 1 AND approved_by IS NULL
-            """,
-            (approver_id, event_id),
-        )
-        if cursor.rowcount != 1:
-            raise LookupError("pending approval not found")
-        self._connection.commit()
-        return self.get(event_id)
+        with self._lock:
+            cursor = self._connection.execute(
+                """
+                UPDATE ledger_events
+                SET requires_approval = 0, approved_by = ?
+                WHERE id = ? AND requires_approval = 1 AND approved_by IS NULL
+                """,
+                (approver_id, event_id),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError("pending approval not found")
+            self._connection.commit()
+            return self.get(event_id)
 
     def get(self, event_id: str) -> LedgerEvent:
-        row = self._connection.execute(
-            "SELECT * FROM ledger_events WHERE id = ?", (event_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM ledger_events WHERE id = ?", (event_id,)
+            ).fetchone()
         if row is None:
             raise LookupError("ledger event not found")
         return self._row_to_event(row)
@@ -170,16 +175,17 @@ class EventLedger:
     def list_events(self, team_id: str | None = None, limit: int | None = None) -> list[LedgerEvent]:
         limit_sql = "" if limit is None else " LIMIT ?"
         limit_params: tuple[Any, ...] = () if limit is None else (limit,)
-        if team_id is None:
-            rows = self._connection.execute(
-                "SELECT * FROM ledger_events ORDER BY created_at DESC" + limit_sql,
-                limit_params,
-            ).fetchall()
-        else:
-            rows = self._connection.execute(
-                "SELECT * FROM ledger_events WHERE team_id = ? ORDER BY created_at DESC" + limit_sql,
-                (team_id, *limit_params),
-            ).fetchall()
+        with self._lock:
+            if team_id is None:
+                rows = self._connection.execute(
+                    "SELECT * FROM ledger_events ORDER BY created_at DESC" + limit_sql,
+                    limit_params,
+                ).fetchall()
+            else:
+                rows = self._connection.execute(
+                    "SELECT * FROM ledger_events WHERE team_id = ? ORDER BY created_at DESC" + limit_sql,
+                    (team_id, *limit_params),
+                ).fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def list_pending_approvals(
@@ -194,21 +200,23 @@ class EventLedger:
         if limit is not None:
             query += " LIMIT ?"
             params += (limit,)
-        rows = self._connection.execute(query, params).fetchall()
+        with self._lock:
+            rows = self._connection.execute(query, params).fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def summarize(self, team_id: str | None = None) -> list[TeamSummary]:
         where = "" if team_id is None else "WHERE team_id = ?"
         params: tuple[Any, ...] = () if team_id is None else (team_id,)
-        rows = self._connection.execute(
-            """
-            SELECT team_id, currency, category, requires_approval, amount
-            FROM ledger_events
-            """ + where + """
-            ORDER BY team_id, currency
-            """,
-            params,
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT team_id, currency, category, requires_approval, amount
+                FROM ledger_events
+                """ + where + """
+                ORDER BY team_id, currency
+                """,
+                params,
+            ).fetchall()
         totals: dict[tuple[str, str], dict[str, Any]] = {}
         for row in rows:
             key = (row["team_id"], row["currency"])

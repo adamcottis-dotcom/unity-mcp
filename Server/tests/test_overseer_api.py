@@ -1,8 +1,28 @@
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from overseer import EventLedger, create_overseer_app, run_support_ticket_simulation
+
+
+@pytest.mark.parametrize(
+    ("subscription_amount", "model_cost"),
+    [(float("nan"), 31.25), (499, float("inf")), (-1, 31.25), (499, -1)],
+)
+def test_simulation_validates_amounts_before_recording_events(
+    subscription_amount, model_cost
+):
+    ledger = EventLedger(sqlite3.connect(":memory:"))
+
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        run_support_ticket_simulation(
+            ledger,
+            subscription_amount=subscription_amount,
+            model_cost=model_cost,
+        )
+
+    assert ledger.list_events() == []
 
 
 def test_api_exposes_simulation_events_and_financial_summary():
@@ -65,8 +85,21 @@ def test_api_requires_authentication_and_enforces_team_scope():
     assert client.get("/events").status_code == 401
     assert (
         client.get(
+            "/events",
+            headers={"X-Overseer-Api-Key": "test-key"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
             "/events?team_id=lead-generation",
             headers={"X-Overseer-Api-Key": "test-key"},
         ).status_code
         == 403
     )
+
+    for path in ("/summaries", "/approvals"):
+        assert (
+            client.get(path, headers={"X-Overseer-Api-Key": "test-key"}).status_code
+            == 403
+        )

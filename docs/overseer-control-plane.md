@@ -56,13 +56,15 @@ app = create_overseer_app(ledger, api_key="set-this-from-secret-storage")
 
 It provides authenticated `GET /events`, `GET /summaries`, and `GET /approvals`
 using the `X-Overseer-Api-Key` header. Pass `authorized_team_ids` when the
-operator should be restricted to a subset of teams. The
+operator should be restricted to a subset of teams; scoped requests must
+include a team ID from that set. The
 `run_support_ticket_simulation()` helper can populate a local demo ledger so
 the dashboard can be built and reviewed before any provider credentials exist.
-When the API is used, create the SQLite connection with
-`EventLedger` will copy it to a thread-safe connection for API handlers. File-
+When the API is used, `EventLedger` copies the SQLite connection to one that is
+safe for API handlers. File-
 backed databases remain persistent, while in-memory databases are copied into
-an isolated thread-safe database owned by the ledger.
+an isolated database owned by the ledger, with access serialized for FastAPI
+worker threads.
 
 Amounts are stored as exact decimals and summaries are separated by currency.
 Pending approval events remain visible in the activity and approval feeds but

@@ -1,4 +1,5 @@
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -78,10 +79,19 @@ def test_exact_money_is_currency_aware_and_pending_amounts_are_excluded(ledger):
     assert by_currency["EUR"].revenue == Decimal("0")
     assert by_currency["EUR"].pending_approvals == 1
 
+    ledger.approve(
+        ledger.list_pending_approvals()[0].id,
+        "operator-1",
+    )
+    by_currency = {summary.currency: summary for summary in ledger.summarize()}
+    assert by_currency["EUR"].revenue == Decimal("100")
+
 
 def test_rejects_non_finite_or_naive_timestamps(ledger):
     with pytest.raises(ValueError, match="finite"):
         ledger.record(category="cost", event_type="x", team_id="t", agent_id="a", amount=float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        ledger.record(category="cost", event_type="x", team_id="t", agent_id="a", amount=float("inf"))
     with pytest.raises(ValueError, match="timezone-aware"):
         ledger.record(
             category="activity",
@@ -99,6 +109,15 @@ def test_rejects_non_finite_or_naive_timestamps(ledger):
         created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
     )
     assert event.created_at.endswith("+00:00")
+
+    offset_event = ledger.record(
+        category="activity",
+        event_type="x",
+        team_id="t",
+        agent_id="a",
+        created_at=datetime.fromisoformat("2025-01-01T01:00:00+01:00"),
+    )
+    assert offset_event.created_at == "2025-01-01T00:00:00+00:00"
 
 
 def test_requires_approval_is_visible_and_can_be_approved(ledger):
@@ -143,3 +162,18 @@ def test_rejects_unsafe_or_ambiguous_events(ledger):
             requires_approval=True,
             approved_by="operator",
         )
+
+
+def test_serializes_concurrent_worker_thread_access(ledger):
+    def record_event(index):
+        ledger.record(
+            category="activity",
+            event_type="worker_event",
+            team_id="support",
+            agent_id=f"agent-{index}",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(record_event, range(40)))
+
+    assert len(ledger.list_events(team_id="support")) == 40

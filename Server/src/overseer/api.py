@@ -23,6 +23,9 @@ def create_overseer_app(
     if not api_key:
         raise ValueError("api_key is required")
     app = FastAPI(title="Overseer Control Plane", version="1.0")
+    scoped_team_ids = (
+        frozenset(authorized_team_ids) if authorized_team_ids is not None else None
+    )
 
     def serialize(value: object) -> object:
         if isinstance(value, Decimal):
@@ -36,12 +39,9 @@ def create_overseer_app(
     def authorize(requested_team_id: str | None, presented_key: str | None) -> None:
         if presented_key is None or not compare_digest(presented_key, api_key):
             raise HTTPException(status_code=401, detail="authentication required")
-        if (
-            requested_team_id is not None
-            and authorized_team_ids is not None
-            and requested_team_id not in authorized_team_ids
-        ):
-            raise HTTPException(status_code=403, detail="team access denied")
+        if scoped_team_ids is not None:
+            if requested_team_id is None or requested_team_id not in scoped_team_ids:
+                raise HTTPException(status_code=403, detail="team access denied")
 
     @app.get("/events")
     def events(

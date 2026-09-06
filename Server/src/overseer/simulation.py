@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+from decimal import Decimal, InvalidOperation
 
 from .ledger import EventLedger, LedgerEvent
 
@@ -15,9 +15,16 @@ def run_support_ticket_simulation(
     model_cost: float = 31.25,
 ) -> list[LedgerEvent]:
     """Record one complete support-ticket lifecycle without external side effects."""
-    if not all(
-        math.isfinite(float(amount)) and amount >= 0
-        for amount in (subscription_amount, model_cost)
+    try:
+        exact_subscription_amount = Decimal(str(subscription_amount))
+        exact_model_cost = Decimal(str(model_cost))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(
+            "subscription_amount and model_cost must be finite and non-negative"
+        ) from None
+    if any(
+        not amount.is_finite() or amount < 0
+        for amount in (exact_subscription_amount, exact_model_cost)
     ):
         raise ValueError("subscription_amount and model_cost must be finite and non-negative")
     task_id = f"ticket:{ticket_id}"
@@ -44,7 +51,7 @@ def run_support_ticket_simulation(
             team_id="support",
             agent_id="support-agent",
             task_id=task_id,
-            amount=model_cost,
+            amount=exact_model_cost,
             currency="USD",
         ),
         ledger.record(
@@ -53,7 +60,7 @@ def run_support_ticket_simulation(
             team_id="support",
             agent_id="billing-agent",
             task_id=task_id,
-            amount=subscription_amount,
+            amount=exact_subscription_amount,
             currency="USD",
         ),
     ]
