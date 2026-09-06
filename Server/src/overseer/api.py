@@ -28,6 +28,7 @@ def create_overseer_app(
     )
 
     def serialize(value: object) -> object:
+        """Convert ledger values into JSON-compatible response values."""
         if isinstance(value, Decimal):
             return float(value)
         if isinstance(value, dict):
@@ -37,6 +38,7 @@ def create_overseer_app(
         return value
 
     def authorize(requested_team_id: str | None, presented_key: str | None) -> None:
+        """Validate the API key and optional team scope for an endpoint request."""
         if presented_key is None or not compare_digest(presented_key, api_key):
             raise HTTPException(status_code=401, detail="authentication required")
         if scoped_team_ids is not None:
@@ -49,6 +51,7 @@ def create_overseer_app(
         limit: int = Query(default=100, ge=1, le=500),
         x_overseer_api_key: str | None = Header(default=None),
     ) -> list[dict]:
+        """Return recent ledger events visible to the authenticated caller."""
         authorize(team_id, x_overseer_api_key)
         return [serialize(asdict(event)) for event in ledger.list_events(team_id, limit)]
 
@@ -57,6 +60,7 @@ def create_overseer_app(
         team_id: str | None = Query(default=None),
         x_overseer_api_key: str | None = Header(default=None),
     ) -> list[dict]:
+        """Return financial summaries visible to the authenticated caller."""
         authorize(team_id, x_overseer_api_key)
         return [serialize(asdict(summary)) for summary in ledger.summarize(team_id)]
 
@@ -66,6 +70,7 @@ def create_overseer_app(
         limit: int = Query(default=100, ge=1, le=500),
         x_overseer_api_key: str | None = Header(default=None),
     ) -> list[dict]:
+        """Return pending approval events visible to the authenticated caller."""
         authorize(team_id, x_overseer_api_key)
         return [
             serialize(asdict(event))

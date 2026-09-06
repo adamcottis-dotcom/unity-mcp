@@ -18,6 +18,8 @@ from uuid import uuid4
 
 @dataclass(frozen=True)
 class LedgerEvent:
+    """Immutable representation of one activity, revenue, or cost event."""
+
     id: str
     category: str
     event_type: str
@@ -34,6 +36,8 @@ class LedgerEvent:
 
 @dataclass(frozen=True)
 class TeamSummary:
+    """Aggregated financial and approval state for one team and currency."""
+
     team_id: str
     currency: str
     revenue: Decimal
@@ -47,6 +51,7 @@ class EventLedger:
     """SQLite-backed ledger suitable for simulation and a later API adapter."""
 
     def __init__(self, connection: sqlite3.Connection):
+        """Initialize the ledger and migrate an existing database if needed."""
         self._lock = RLock()
         database_path = connection.execute("PRAGMA database_list").fetchone()[2]
         if database_path:
@@ -86,6 +91,7 @@ class EventLedger:
         self._connection.commit()
 
     def _migrate_legacy_amount_column(self) -> None:
+        """Rewrite legacy REAL amounts as text to preserve exact decimals."""
         columns = self._connection.execute("PRAGMA table_info(ledger_events)").fetchall()
         amount_column = next((column for column in columns if column["name"] == "amount"), None)
         if amount_column is None or amount_column["type"].upper() != "REAL":
@@ -142,6 +148,7 @@ class EventLedger:
         metadata: dict[str, Any] | None = None,
         created_at: datetime | None = None,
     ) -> LedgerEvent:
+        """Validate and persist one ledger event, returning its immutable record."""
         if category not in {"activity", "revenue", "cost"}:
             raise ValueError("category must be activity, revenue, or cost")
         if not team_id or not agent_id or not event_type:
@@ -194,6 +201,7 @@ class EventLedger:
         return event
 
     def approve(self, event_id: str, approver_id: str) -> LedgerEvent:
+        """Approve a pending event and return the updated record."""
         if not approver_id:
             raise ValueError("approver_id is required")
         with self._lock:
@@ -211,6 +219,7 @@ class EventLedger:
             return self.get(event_id)
 
     def get(self, event_id: str) -> LedgerEvent:
+        """Load one event by ID or raise when it does not exist."""
         with self._lock:
             row = self._connection.execute(
                 "SELECT * FROM ledger_events WHERE id = ?", (event_id,)
@@ -220,6 +229,7 @@ class EventLedger:
         return self._row_to_event(row)
 
     def list_events(self, team_id: str | None = None, limit: int | None = None) -> list[LedgerEvent]:
+        """Return newest events, optionally filtered by team and limited in count."""
         limit_sql = "" if limit is None else " LIMIT ?"
         limit_params: tuple[Any, ...] = () if limit is None else (limit,)
         with self._lock:
@@ -238,6 +248,7 @@ class EventLedger:
     def list_pending_approvals(
         self, team_id: str | None = None, limit: int | None = None
     ) -> list[LedgerEvent]:
+        """Return newest events that still require human approval."""
         query = "SELECT * FROM ledger_events WHERE requires_approval = 1"
         params: tuple[Any, ...] = ()
         if team_id is not None:
@@ -252,6 +263,7 @@ class EventLedger:
         return [self._row_to_event(row) for row in rows]
 
     def summarize(self, team_id: str | None = None) -> list[TeamSummary]:
+        """Aggregate revenue, costs, activity, and approvals by team and currency."""
         where = "" if team_id is None else "WHERE team_id = ?"
         params: tuple[Any, ...] = () if team_id is None else (team_id,)
         with self._lock:
@@ -298,6 +310,7 @@ class EventLedger:
 
     @staticmethod
     def _row_to_event(row: sqlite3.Row) -> LedgerEvent:
+        """Convert a SQLite row into the public immutable event model."""
         return LedgerEvent(
             id=row["id"],
             category=row["category"],
