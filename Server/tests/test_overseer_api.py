@@ -1,4 +1,5 @@
 import sqlite3
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +24,27 @@ def test_simulation_validates_amounts_before_recording_events(
         )
 
     assert ledger.list_events() == []
+
+
+def test_simulation_records_full_lifecycle_for_valid_amounts():
+    ledger = EventLedger(sqlite3.connect(":memory:"))
+
+    events = run_support_ticket_simulation(
+        ledger,
+        ticket_id="T-42",
+        subscription_amount=Decimal("499.00"),
+        model_cost=Decimal("31.25"),
+    )
+
+    assert [event.event_type for event in events] == [
+        "ticket_received",
+        "ticket_resolved",
+        "model_usage",
+        "subscription_paid",
+    ]
+    assert len(ledger.list_events()) == 4
+    assert events[2].amount == Decimal("31.25")
+    assert events[3].amount == Decimal("499.00")
 
 
 def test_api_exposes_simulation_events_and_financial_summary():
