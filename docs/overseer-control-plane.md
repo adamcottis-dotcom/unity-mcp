@@ -60,8 +60,9 @@ operator should be restricted to a subset of teams. The
 `run_support_ticket_simulation()` helper can populate a local demo ledger so
 the dashboard can be built and reviewed before any provider credentials exist.
 When the API is used, create the SQLite connection with
-`check_same_thread=False`; FastAPI may serve synchronous handlers from a worker
-thread.
+`EventLedger` will copy it to a thread-safe connection for API handlers. File-
+backed databases remain persistent, while in-memory databases are copied into
+an isolated thread-safe database owned by the ledger.
 
 Amounts are stored as exact decimals and summaries are separated by currency.
 Pending approval events remain visible in the activity and approval feeds but

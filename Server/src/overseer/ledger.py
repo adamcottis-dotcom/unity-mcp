@@ -46,7 +46,12 @@ class EventLedger:
     """SQLite-backed ledger suitable for simulation and a later API adapter."""
 
     def __init__(self, connection: sqlite3.Connection):
-        self._connection = connection
+        database_path = connection.execute("PRAGMA database_list").fetchone()[2]
+        if database_path:
+            self._connection = sqlite3.connect(database_path, check_same_thread=False)
+        else:
+            self._connection = sqlite3.connect(":memory:", check_same_thread=False)
+            connection.backup(self._connection)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.executescript(

@@ -6,7 +6,7 @@ from overseer import EventLedger, create_overseer_app, run_support_ticket_simula
 
 
 def test_api_exposes_simulation_events_and_financial_summary():
-    ledger = EventLedger(sqlite3.connect(":memory:", check_same_thread=False))
+    ledger = EventLedger(sqlite3.connect(":memory:"))
     run_support_ticket_simulation(ledger, ticket_id="T-42")
     client = TestClient(create_overseer_app(ledger, api_key="test-key"))
 
@@ -29,7 +29,7 @@ def test_api_exposes_simulation_events_and_financial_summary():
 
 
 def test_api_only_returns_pending_approvals():
-    ledger = EventLedger(sqlite3.connect(":memory:", check_same_thread=False))
+    ledger = EventLedger(sqlite3.connect(":memory:"))
     pending = ledger.record(
         category="cost",
         event_type="refund_requested",
@@ -53,7 +53,7 @@ def test_api_only_returns_pending_approvals():
 
 
 def test_api_requires_authentication_and_enforces_team_scope():
-    ledger = EventLedger(sqlite3.connect(":memory:", check_same_thread=False))
+    ledger = EventLedger(sqlite3.connect(":memory:"))
     client = TestClient(
         create_overseer_app(
             ledger,
