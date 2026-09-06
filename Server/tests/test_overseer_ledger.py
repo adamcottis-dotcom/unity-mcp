@@ -126,6 +126,8 @@ def test_rejects_non_finite_or_naive_timestamps(ledger):
         ledger.record(category="cost", event_type="x", team_id="t", agent_id="a", amount=float("nan"))
     with pytest.raises(ValueError, match="finite"):
         ledger.record(category="cost", event_type="x", team_id="t", agent_id="a", amount=float("inf"))
+    with pytest.raises(ValueError, match="finite"):
+        ledger.record(category="cost", event_type="x", team_id="t", agent_id="a", amount=float("-inf"))
     with pytest.raises(ValueError, match="timezone-aware"):
         ledger.record(
             category="activity",
