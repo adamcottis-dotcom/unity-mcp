@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import json
 import sqlite3
-from typing import Any, Iterable
+from typing import Any
 from uuid import uuid4
 
 
@@ -22,7 +23,7 @@ class LedgerEvent:
     team_id: str
     agent_id: str
     task_id: str | None
-    amount: float
+    amount: Decimal
     currency: str
     requires_approval: bool
     approved_by: str | None
@@ -33,9 +34,10 @@ class LedgerEvent:
 @dataclass(frozen=True)
 class TeamSummary:
     team_id: str
-    revenue: float
-    costs: float
-    profit: float
+    currency: str
+    revenue: Decimal
+    costs: Decimal
+    profit: Decimal
     activity_count: int
     pending_approvals: int
 
@@ -56,7 +58,7 @@ class EventLedger:
                 team_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
                 task_id TEXT,
-                amount REAL NOT NULL DEFAULT 0,
+                amount TEXT NOT NULL DEFAULT '0',
                 currency TEXT NOT NULL,
                 requires_approval INTEGER NOT NULL DEFAULT 0,
                 approved_by TEXT,
@@ -79,7 +81,7 @@ class EventLedger:
         team_id: str,
         agent_id: str,
         task_id: str | None = None,
-        amount: float = 0,
+        amount: Decimal | int | float | str = 0,
         currency: str = "USD",
         requires_approval: bool = False,
         approved_by: str | None = None,
@@ -92,8 +94,20 @@ class EventLedger:
             raise ValueError("team_id, agent_id, and event_type are required")
         if requires_approval and approved_by is not None:
             raise ValueError("an event cannot require approval and already be approved")
-        if amount < 0:
+        try:
+            exact_amount = Decimal(str(amount))
+        except (InvalidOperation, ValueError):
+            raise ValueError("amount must be a finite non-negative number") from None
+        if not exact_amount.is_finite():
+            raise ValueError("amount must be finite and non-negative")
+        if exact_amount < 0:
             raise ValueError("amount must be non-negative; use category to distinguish revenue and cost")
+        if created_at is not None:
+            if created_at.tzinfo is None or created_at.utcoffset() is None:
+                raise ValueError("created_at must be timezone-aware")
+            normalized_created_at = created_at.astimezone(timezone.utc)
+        else:
+            normalized_created_at = datetime.now(timezone.utc)
 
         event = LedgerEvent(
             id=str(uuid4()),
@@ -102,12 +116,12 @@ class EventLedger:
             team_id=team_id,
             agent_id=agent_id,
             task_id=task_id,
-            amount=amount,
+            amount=exact_amount,
             currency=currency.upper(),
             requires_approval=requires_approval,
             approved_by=approved_by,
             metadata=metadata or {},
-            created_at=(created_at or datetime.now(timezone.utc)).isoformat(),
+            created_at=normalized_created_at.isoformat(),
         )
         self._connection.execute(
             """
@@ -118,6 +132,7 @@ class EventLedger:
                     :currency, :requires_approval, :approved_by, :metadata_json, :created_at)
             """,
             {**asdict(event), "requires_approval": int(event.requires_approval),
+             "amount": str(event.amount),
              "metadata_json": json.dumps(event.metadata, sort_keys=True)},
         )
         self._connection.commit()
@@ -147,45 +162,78 @@ class EventLedger:
             raise LookupError("ledger event not found")
         return self._row_to_event(row)
 
-    def list_events(self, team_id: str | None = None) -> list[LedgerEvent]:
+    def list_events(self, team_id: str | None = None, limit: int | None = None) -> list[LedgerEvent]:
+        limit_sql = "" if limit is None else " LIMIT ?"
+        limit_params: tuple[Any, ...] = () if limit is None else (limit,)
         if team_id is None:
             rows = self._connection.execute(
-                "SELECT * FROM ledger_events ORDER BY created_at DESC"
+                "SELECT * FROM ledger_events ORDER BY created_at DESC" + limit_sql,
+                limit_params,
             ).fetchall()
         else:
             rows = self._connection.execute(
-                "SELECT * FROM ledger_events WHERE team_id = ? ORDER BY created_at DESC",
-                (team_id,),
+                "SELECT * FROM ledger_events WHERE team_id = ? ORDER BY created_at DESC" + limit_sql,
+                (team_id, *limit_params),
             ).fetchall()
+        return [self._row_to_event(row) for row in rows]
+
+    def list_pending_approvals(
+        self, team_id: str | None = None, limit: int | None = None
+    ) -> list[LedgerEvent]:
+        query = "SELECT * FROM ledger_events WHERE requires_approval = 1"
+        params: tuple[Any, ...] = ()
+        if team_id is not None:
+            query += " AND team_id = ?"
+            params += (team_id,)
+        query += " ORDER BY created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params += (limit,)
+        rows = self._connection.execute(query, params).fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def summarize(self, team_id: str | None = None) -> list[TeamSummary]:
         where = "" if team_id is None else "WHERE team_id = ?"
-        params: Iterable[str] = () if team_id is None else (team_id,)
+        params: tuple[Any, ...] = () if team_id is None else (team_id,)
         rows = self._connection.execute(
-            f"""
-            SELECT team_id,
-                   COALESCE(SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END), 0) AS revenue,
-                   COALESCE(SUM(CASE WHEN category = 'cost' THEN amount ELSE 0 END), 0) AS costs,
-                   COUNT(*) AS activity_count,
-                   COALESCE(SUM(CASE WHEN requires_approval = 1 THEN 1 ELSE 0 END), 0)
-                       AS pending_approvals
-            FROM ledger_events {where}
-            GROUP BY team_id
-            ORDER BY team_id
+            """
+            SELECT team_id, currency, category, requires_approval, amount
+            FROM ledger_events
+            """ + where + """
+            ORDER BY team_id, currency
             """,
-            tuple(params),
+            params,
         ).fetchall()
+        totals: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            key = (row["team_id"], row["currency"])
+            total = totals.setdefault(
+                key,
+                {
+                    "revenue": Decimal("0"),
+                    "costs": Decimal("0"),
+                    "activity_count": 0,
+                    "pending_approvals": 0,
+                },
+            )
+            total["activity_count"] += 1
+            if row["requires_approval"]:
+                total["pending_approvals"] += 1
+            elif row["category"] == "revenue":
+                total["revenue"] += Decimal(row["amount"])
+            elif row["category"] == "cost":
+                total["costs"] += Decimal(row["amount"])
         return [
             TeamSummary(
-                team_id=row["team_id"],
-                revenue=row["revenue"],
-                costs=row["costs"],
-                profit=row["revenue"] - row["costs"],
-                activity_count=row["activity_count"],
-                pending_approvals=row["pending_approvals"],
+                team_id=team_id,
+                currency=currency,
+                revenue=total["revenue"],
+                costs=total["costs"],
+                profit=total["revenue"] - total["costs"],
+                activity_count=total["activity_count"],
+                pending_approvals=total["pending_approvals"],
             )
-            for row in rows
+            for (team_id, currency), total in sorted(totals.items())
         ]
 
     @staticmethod
@@ -197,7 +245,7 @@ class EventLedger:
             team_id=row["team_id"],
             agent_id=row["agent_id"],
             task_id=row["task_id"],
-            amount=row["amount"],
+            amount=Decimal(str(row["amount"])),
             currency=row["currency"],
             requires_approval=bool(row["requires_approval"]),
             approved_by=row["approved_by"],

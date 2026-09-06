@@ -51,15 +51,21 @@ permission to mutate them:
 ```python
 from overseer import create_overseer_app
 
-app = create_overseer_app(ledger)
+app = create_overseer_app(ledger, api_key="set-this-from-secret-storage")
 ```
 
-It provides `GET /events`, `GET /summaries`, and `GET /approvals`. The
+It provides authenticated `GET /events`, `GET /summaries`, and `GET /approvals`
+using the `X-Overseer-Api-Key` header. Pass `authorized_team_ids` when the
+operator should be restricted to a subset of teams. The
 `run_support_ticket_simulation()` helper can populate a local demo ledger so
 the dashboard can be built and reviewed before any provider credentials exist.
 When the API is used, create the SQLite connection with
 `check_same_thread=False`; FastAPI may serve synchronous handlers from a worker
 thread.
+
+Amounts are stored as exact decimals and summaries are separated by currency.
+Pending approval events remain visible in the activity and approval feeds but
+are excluded from realized revenue, cost, and profit totals until approved.
 
 The ledger intentionally does not send emails, place calls, issue refunds, or
 connect to a payment provider. Those actions must be implemented as connectors

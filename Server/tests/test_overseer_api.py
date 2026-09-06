@@ -8,15 +8,17 @@ from overseer import EventLedger, create_overseer_app, run_support_ticket_simula
 def test_api_exposes_simulation_events_and_financial_summary():
     ledger = EventLedger(sqlite3.connect(":memory:", check_same_thread=False))
     run_support_ticket_simulation(ledger, ticket_id="T-42")
-    client = TestClient(create_overseer_app(ledger))
+    client = TestClient(create_overseer_app(ledger, api_key="test-key"))
 
-    events = client.get("/events?team_id=support").json()
-    summary = client.get("/summaries?team_id=support").json()
+    headers = {"X-Overseer-Api-Key": "test-key"}
+    events = client.get("/events?team_id=support", headers=headers).json()
+    summary = client.get("/summaries?team_id=support", headers=headers).json()
 
     assert len(events) == 4
     assert summary == [
         {
             "team_id": "support",
+            "currency": "USD",
             "revenue": 499,
             "costs": 31.25,
             "profit": 467.75,
@@ -42,9 +44,29 @@ def test_api_only_returns_pending_approvals():
         team_id="support",
         agent_id="support-agent",
     )
-    client = TestClient(create_overseer_app(ledger))
+    client = TestClient(create_overseer_app(ledger, api_key="test-key"))
 
-    approvals = client.get("/approvals").json()
+    approvals = client.get("/approvals", headers={"X-Overseer-Api-Key": "test-key"}).json()
 
     assert len(approvals) == 1
     assert approvals[0]["id"] == pending.id
+
+
+def test_api_requires_authentication_and_enforces_team_scope():
+    ledger = EventLedger(sqlite3.connect(":memory:", check_same_thread=False))
+    client = TestClient(
+        create_overseer_app(
+            ledger,
+            api_key="test-key",
+            authorized_team_ids={"support"},
+        )
+    )
+
+    assert client.get("/events").status_code == 401
+    assert (
+        client.get(
+            "/events?team_id=lead-generation",
+            headers={"X-Overseer-Api-Key": "test-key"},
+        ).status_code
+        == 403
+    )

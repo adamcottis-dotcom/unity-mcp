@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .ledger import EventLedger, LedgerEvent
 
 
@@ -13,6 +15,11 @@ def run_support_ticket_simulation(
     model_cost: float = 31.25,
 ) -> list[LedgerEvent]:
     """Record one complete support-ticket lifecycle without external side effects."""
+    if not all(
+        math.isfinite(float(amount)) and amount >= 0
+        for amount in (subscription_amount, model_cost)
+    ):
+        raise ValueError("subscription_amount and model_cost must be finite and non-negative")
     task_id = f"ticket:{ticket_id}"
     events = [
         ledger.record(

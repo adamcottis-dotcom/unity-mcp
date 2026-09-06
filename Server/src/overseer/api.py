@@ -4,36 +4,72 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from fastapi import FastAPI, Query
+from hmac import compare_digest
+from decimal import Decimal
+from typing import Collection
+
+from fastapi import FastAPI, Header, HTTPException, Query
 
 from .ledger import EventLedger
 
 
-def create_overseer_app(ledger: EventLedger) -> FastAPI:
-    """Create a dashboard-friendly API backed by an existing ledger."""
+def create_overseer_app(
+    ledger: EventLedger,
+    *,
+    api_key: str,
+    authorized_team_ids: Collection[str] | None = None,
+) -> FastAPI:
+    """Create an authenticated, read-only API backed by an existing ledger."""
+    if not api_key:
+        raise ValueError("api_key is required")
     app = FastAPI(title="Overseer Control Plane", version="1.0")
+
+    def serialize(value: object) -> object:
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, dict):
+            return {key: serialize(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [serialize(item) for item in value]
+        return value
+
+    def authorize(requested_team_id: str | None, presented_key: str | None) -> None:
+        if presented_key is None or not compare_digest(presented_key, api_key):
+            raise HTTPException(status_code=401, detail="authentication required")
+        if (
+            requested_team_id is not None
+            and authorized_team_ids is not None
+            and requested_team_id not in authorized_team_ids
+        ):
+            raise HTTPException(status_code=403, detail="team access denied")
 
     @app.get("/events")
     def events(
         team_id: str | None = Query(default=None),
         limit: int = Query(default=100, ge=1, le=500),
+        x_overseer_api_key: str | None = Header(default=None),
     ) -> list[dict]:
-        return [asdict(event) for event in ledger.list_events(team_id)[:limit]]
+        authorize(team_id, x_overseer_api_key)
+        return [serialize(asdict(event)) for event in ledger.list_events(team_id, limit)]
 
     @app.get("/summaries")
-    def summaries(team_id: str | None = Query(default=None)) -> list[dict]:
-        return [asdict(summary) for summary in ledger.summarize(team_id)]
+    def summaries(
+        team_id: str | None = Query(default=None),
+        x_overseer_api_key: str | None = Header(default=None),
+    ) -> list[dict]:
+        authorize(team_id, x_overseer_api_key)
+        return [serialize(asdict(summary)) for summary in ledger.summarize(team_id)]
 
     @app.get("/approvals")
     def pending_approvals(
         team_id: str | None = Query(default=None),
         limit: int = Query(default=100, ge=1, le=500),
+        x_overseer_api_key: str | None = Header(default=None),
     ) -> list[dict]:
-        pending = [
-            event
-            for event in ledger.list_events(team_id)
-            if event.requires_approval
+        authorize(team_id, x_overseer_api_key)
+        return [
+            serialize(asdict(event))
+            for event in ledger.list_pending_approvals(team_id, limit)
         ]
-        return [asdict(event) for event in pending[:limit]]
 
     return app
